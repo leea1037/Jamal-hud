@@ -1,0 +1,217 @@
+-- Roblox Mobile GUI Editor Script (Drag + Resize, no smart UI, per-button saving)
+
+local UIS = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+local Player = Players.LocalPlayer
+local PlayerGui = Player:WaitForChild("PlayerGui")
+local HttpService = game:GetService("HttpService")
+
+local screenGui = Instance.new("ScreenGui", PlayerGui)
+screenGui.Name = "MobileGuiEditor"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+
+local dragToggle = Instance.new("TextButton")
+dragToggle.Size = UDim2.new(0, 130, 0, 40)
+dragToggle.Position = UDim2.new(0.5, -65, 0, 10)
+dragToggle.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+dragToggle.TextColor3 = Color3.new(1, 1, 1)
+dragToggle.Text = "Drag: OFF"
+dragToggle.TextScaled = true
+dragToggle.Parent = screenGui
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 30, 0, 30)
+closeBtn.Position = UDim2.new(1, -35, 0, 5)
+closeBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
+closeBtn.Text = "X"
+closeBtn.TextColor3 = Color3.new(1, 1, 1)
+closeBtn.TextScaled = true
+closeBtn.Parent = dragToggle
+
+local resizeGui = Instance.new("Frame")
+resizeGui.Size = UDim2.new(0, 250, 0, 110)
+resizeGui.Position = UDim2.new(0.5, -125, 0.5, -55)
+resizeGui.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+resizeGui.Visible = false
+resizeGui.Parent = screenGui
+
+local function createSlider(labelText, yPos)
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, 0, 0, 20)
+	label.Position = UDim2.new(0, 0, 0, yPos)
+	label.BackgroundTransparency = 1
+	label.Text = labelText
+	label.TextColor3 = Color3.new(1, 1, 1)
+	label.TextScaled = true
+	label.Parent = resizeGui
+
+	local slider = Instance.new("TextButton")
+	slider.Size = UDim2.new(0.9, 0, 0, 30)
+	slider.Position = UDim2.new(0.05, 0, 0, yPos + 20)
+	slider.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+	slider.Text = "Drag to Resize"
+	slider.TextColor3 = Color3.new(1, 1, 1)
+	slider.TextScaled = true
+	slider.Parent = resizeGui
+
+	return slider
+end
+
+local widthSlider = createSlider("Width", 0)
+local heightSlider = createSlider("Height", 55)
+
+local draggingMode = false
+local currentTarget = nil
+
+local fileName = "gui_layout.json"
+local savedLayouts = {}
+
+function saveLayoutToFile()
+	if writefile then
+		local layout = {}
+		for key, data in pairs(savedLayouts) do
+			layout[key] = {
+				Pos = {data.Position.X.Scale, data.Position.X.Offset, data.Position.Y.Scale, data.Position.Y.Offset},
+				Size = {data.Size.X.Scale, data.Size.X.Offset, data.Size.Y.Scale, data.Size.Y.Offset}
+			}
+		end
+		writefile(fileName, HttpService:JSONEncode(layout))
+	end
+end
+
+function loadLayoutFromFile()
+	if readfile and isfile and isfile(fileName) then
+		local success, data = pcall(function()
+			return HttpService:JSONDecode(readfile(fileName))
+		end)
+		if success and data then
+			for _, gui in ipairs(PlayerGui:GetDescendants()) do
+				if gui:IsA("GuiButton") and data[gui.Name] then
+					local pos = data[gui.Name].Pos
+					local size = data[gui.Name].Size
+					gui.Position = UDim2.new(unpack(pos))
+					gui.Size = UDim2.new(unpack(size))
+					savedLayouts[gui.Name] = {
+						Position = gui.Position,
+						Size = gui.Size
+					}
+				end
+			end
+		end
+	end
+end
+
+local function setupSlider(sliderButton, axis)
+	local resizing = false
+	local startPos, originalSize
+
+	sliderButton.InputBegan:Connect(function(input)
+		if not currentTarget then return end
+		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+			resizing = true
+			startPos = input.Position
+			originalSize = currentTarget.Size
+
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					resizing = false
+					saveLayoutToFile()
+				end
+			end)
+		end
+	end)
+
+	sliderButton.InputChanged:Connect(function(input)
+		if resizing and currentTarget then
+			local delta = input.Position - startPos
+			if axis == "X" then
+				local newWidth = math.clamp(originalSize.X.Offset + delta.X, 50, 600)
+				currentTarget.Size = UDim2.new(0, newWidth, currentTarget.Size.Y.Scale, currentTarget.Size.Y.Offset)
+			elseif axis == "Y" then
+				local newHeight = math.clamp(originalSize.Y.Offset + delta.Y, 20, 400)
+				currentTarget.Size = UDim2.new(currentTarget.Size.X.Scale, currentTarget.Size.X.Offset, 0, newHeight)
+			end
+		end
+	end)
+end
+
+setupSlider(widthSlider, "X")
+setupSlider(heightSlider, "Y")
+
+dragToggle.MouseButton1Click:Connect(function()
+	draggingMode = not draggingMode
+	dragToggle.Text = draggingMode and "Drag: ON" or "Drag: OFF"
+	if not draggingMode then
+		resizeGui.Visible = false
+	end
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+	screenGui:Destroy()
+end)
+
+local function makeDraggable(button)
+	if not button:IsA("GuiButton") or button:IsDescendantOf(screenGui) then return end
+
+	local dragging = false
+	local dragStart, startPos
+
+	button.InputBegan:Connect(function(input)
+		if not draggingMode then return end
+		if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragStart = input.Position
+			startPos = button.Position
+			dragging = true
+			currentTarget = button
+			resizeGui.Visible = true
+
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+					saveLayoutToFile()
+				end
+			end)
+		end
+	end)
+
+	button.InputChanged:Connect(function(input)
+		if dragging and draggingMode and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+			local delta = input.Position - dragStart
+			button.Position = startPos + UDim2.new(0, delta.X, 0, delta.Y)
+		end
+	end)
+
+	button:GetPropertyChangedSignal("Position"):Connect(function()
+		savedLayouts[button.Name] = savedLayouts[button.Name] or {}
+		savedLayouts[button.Name].Position = button.Position
+	end)
+
+	button:GetPropertyChangedSignal("Size"):Connect(function()
+		savedLayouts[button.Name] = savedLayouts[button.Name] or {}
+		savedLayouts[button.Name].Size = button.Size
+	end)
+end
+
+local function hookAllUI()
+	for _, gui in ipairs(PlayerGui:GetDescendants()) do
+		if gui:IsA("GuiButton") and not gui:IsDescendantOf(screenGui) then
+			makeDraggable(gui)
+		end
+	end
+end
+
+hookAllUI()
+loadLayoutFromFile()
+
+PlayerGui.DescendantAdded:Connect(function(gui)
+	if gui:IsA("GuiButton") and not gui:IsDescendantOf(screenGui) then
+		task.wait(0.2)
+		makeDraggable(gui)
+	end
+end)
+
+Player.CharacterAdded:Connect(function()
+	task.wait(2)
+	loadLayoutFromFile()
+end)
